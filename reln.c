@@ -12,6 +12,7 @@
 #include "tsig.h"
 #include "bits.h"
 #include "hash.h"
+#include "psig.h"
 // open a file with a specified suffix
 // - always open for both reading and writing
 
@@ -59,6 +60,36 @@ Status newRelation(char *name, Count nattrs, float pF,
 	// Create a file containing "pm" all-zeroes bit-strings,
     // each of which has length "bm" bits
 	//TODO
+
+	File bit_sliced_file = bsigFile(r);
+	Count m_of_page_sig = psigBits(r);
+	Count max_bit_sliced_pp = maxBsigsPP(r);
+	Count m_of_bits_sig = bsigBits(r);
+
+	Offset idx = 0;
+	while (idx < m_of_page_sig){
+	    PageID pd = p->bsigNpages - 1;
+	    Page page = getPage(bit_sliced_file, pd);
+
+	    if (pageNitems(page) ==max_bit_sliced_pp){
+	        addPage(bit_sliced_file);
+	        p->bsigNpages++;
+	        pd++;
+
+	        free(page);
+            page = newPage();
+            if (page == NULL) return NO_PAGE;
+	    }
+	    Bits bit_sig =newBits(m_of_bits_sig);
+	    putBits(page, pageNitems(page), bit_sig);
+	    addOneItem(page);
+	    p->nbsigs++;
+
+	    putPage(bit_sliced_file,pd, page);
+	    free(bit_sig);
+
+	    idx++;
+	}
 	closeRelation(r);
 	return 0;
 }
@@ -123,12 +154,14 @@ PageID addToRelation(Reln r, Tuple t)
 	pid = rp->npages-1;
 	p = getPage(r->dataf, pid);
 	// check if room on last page; if not add new page
+	Bool check = FALSE;
 	if (pageNitems(p) == rp->tupPP) {
 		addPage(r->dataf);
 		rp->npages++;
 		pid++;
 		free(p);
 		p = newPage();
+		check = TRUE;
 		if (p == NULL) return NO_PAGE;
 	}
 	addTupleToPage(r, p, t);
@@ -138,15 +171,93 @@ PageID addToRelation(Reln r, Tuple t)
 	// compute tuple signature and add to tsigf
 	
 	//TODO
+	Bits tuple_sig = makeTupleSig(r, t);
+	File tuple_sig_file = tsigFile(r);
+	Count num_of_tuple_sig_page = nTsigPages(r);
+	PageID pd = num_of_tuple_sig_page - 1;
+	Page curr_tuple_sig_page = getPage(tuple_sig_file, pd);
+    // if full
+
+    if (pageNitems(curr_tuple_sig_page) == maxTsigsPP(r)) {
+        addPage(tuple_sig_file);
+        rp->tsigNpages++;
+        pd++;
+        free(curr_tuple_sig_page);
+        curr_tuple_sig_page = newPage();
+        if (curr_tuple_sig_page == NULL) return NO_PAGE;
+    }
+    putBits(curr_tuple_sig_page, pageNitems(curr_tuple_sig_page), tuple_sig);
+    addOneItem(curr_tuple_sig_page);
+    putPage(tuple_sig_file, pd, curr_tuple_sig_page);
+    rp->ntsigs++;
+    freeBits(tuple_sig);
 
 	// compute page signature and add to psigf
 
 	//TODO
+	Bits page_sig = makePageSig(r, t);
+	File page_sig_file = psigFile(r);
+	Count num_of_page_sig_page = nPsigPages(r);
+	pd = num_of_page_sig_page - 1;
+	Page page = getPage(page_sig_file, pd);
+	Count m = psigBits(r);
+	Count max_tuple_of_page_sig = maxPsigsPP(r);
 
+    if (pageNitems(page) == 0){
+        putBits(page, pageNitems(page),page_sig);
+        addOneItem(page);
+        putPage(page_sig_file,pd,page);
+        rp->npsigs++;
+    }else{
+        if (check == TRUE){
+            if (pageNitems(page) == max_tuple_of_page_sig){
+                addPage(page_sig_file);
+                rp->psigNpages++;
+                pd++;
+                free(page);
+                page = newPage();
+                if (page == NULL) return NO_PAGE;
+            }
+            putBits(page, pageNitems(page),page_sig);
+            addOneItem(page);
+            putPage(page_sig_file,pd,page);
+            rp->npsigs++;
+        }else{
+            //num_of_tuple_sig_page or num_of_page_sig_page
+            Offset pos = num_of_tuple_sig_page - 1;
+            Bits curr_page_sign = newBits(m);
+            getBits(page, pos, curr_page_sign);
+            orBits(curr_page_sign, page_sig);
+            putBits(page,pos, curr_page_sign);
+            putPage(page_sig_file,pd,page);
+            freeBits(curr_page_sign);
+
+        }
+    }
 	// use page signature to update bit-slices
 
 	//TODO
+	File bit_sliced_file = bsigFile(r);
+    Count max_bit_sliced_sig_pp = maxBsigsPP(r);
+    Count m_of_sliced_page = bsigBits(r);
 
+    for (Offset idx = 0; idx < m; idx++){
+        if (bitIsSet(page_sig, idx) == TRUE){
+            if (pd != idx / max_bit_sliced_sig_pp){
+                pd = idx / max_bit_sliced_sig_pp;
+                page = getPage(bit_sliced_file, pd);
+            }
+
+            Offset position = idx % max_bit_sliced_sig_pp;
+            Bits bits = newBits(m_of_sliced_page);
+            getBits(page, position, bits);
+            setBit(bits, pid);
+            putBits(page, position, bits);
+            putPage(bit_sliced_file, pd, page);
+            freeBits(bits);
+        }
+    }
+    freeBits(page_sig);
 	return nPages(r)-1;
 }
 

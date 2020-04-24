@@ -56,6 +56,40 @@ void scanAndDisplayMatchingTuples(Query q)
 {
 	assert(q != NULL);
 	//TODO
+	Reln r = q->rel;
+	File datafile = dataFile(r);
+	Count totalPage = nPages(r);
+	q->curpage = 0;
+
+	// scan pages
+	while(q->curpage < totalPage){
+        if (bitIsSet(q->pages, q->curpage) == FALSE){
+            continue;
+        }
+        Page curr_page = getPage(datafile, q->curpage);
+        q->curtup = 0;
+        //find tuples in the page
+        Count numTuples = pageNitems(curr_page);
+        Count match = 0;
+        while(q->curtup < numTuples){
+            // content of curr tuple
+            Tuple curr_tuple = getTupleFromPage(r, curr_page, q->curtup);
+            if (tupleMatch(r, curr_tuple, q->qstring)){
+                showTuple(r, curr_tuple);
+                match ++;
+            }
+
+            q->curtup ++;
+            q->ntuples ++;
+        }
+        if (match == 0){
+            q->nfalse ++;
+        }
+
+        q->ntuppages ++;
+
+    }
+    q->curpage ++;
 }
 
 // print statistics on query
